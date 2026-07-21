@@ -1,0 +1,408 @@
+diff --git a/.github/copilot-instructions.md b/.github/copilot-instructions.md
+new file mode 100644
+index 0000000..af34ab3
+--- /dev/null
++++ b/.github/copilot-instructions.md
+@@ -0,0 +1,115 @@
++# Copilot and Codex Instructions
++
++## Project
++
++This repository is an AI Assistant for Amazon Alexa, written in TypeScript. It follows a simplified Clean Architecture and is designed to support future channels and providers without coupling core behavior to a delivery mechanism or SDK.
++
++## Architecture
++
++- Always respect layer boundaries: `domain`, `application`, `infrastructure`, and `shared`.
++- Dependencies point inward. Outer layers may depend on inner layers; inner layers must never depend on outer layers.
++- Never create circular dependencies.
++- Keep business logic in the Application or Domain layers.
++- Infrastructure contains implementations and adapters for external systems.
++- Do not expose external SDK types outside Infrastructure.
++- Prefer dependency injection for dependencies that vary by environment, provider, or test.
++
++## General Rules
++
++- Write production-ready code.
++- Prefer readability and maintainability over cleverness or brevity.
++- Use explicit types at public boundaries and for non-obvious values.
++- Avoid `any`; use narrow project-owned types, `unknown`, and type guards when needed.
++- Avoid unnecessary abstractions and speculative generalization.
++- Keep files focused and modules cohesive.
++- Each function must have a single responsibility.
++- Prefer immutable values and avoid mutable shared state.
++- Do not use static state unless it is an intentional, documented singleton such as the infrastructure logger.
++
++## Configuration
++
++- Never access `process.env` outside the typed infrastructure configuration module.
++- Always consume configuration through the immutable typed `config` export.
++- Validate configuration at startup and fail fast with descriptive errors.
++- Never hard-code secrets, credentials, environment-specific URLs, or model configuration.
++
++## Logging
++
++- Never use `console.log`, `console.error`, or other console methods.
++- Always use the logger singleton from Infrastructure.
++- Use structured logs with useful, safe context.
++- Do not log API keys, tokens, secrets, unredacted provider payloads, or private conversation content.
++- Use JSON logs in production and pretty logs only in development.
++
++## Errors
++
++- Throw typed `Error` subclasses; never throw strings or arbitrary values.
++- Never swallow exceptions.
++- Preserve a failure's cause when wrapping it.
++- Infrastructure must translate third-party exceptions into project-owned typed errors before they cross the boundary.
++- Application services decide how typed errors are handled, retried, mapped, or returned to a channel.
++
++## Naming and Files
++
++- Use `PascalCase` for classes, interfaces, and types.
++- Use `camelCase` for functions, methods, variables, and object properties.
++- Use `UPPER_CASE` for constants that are truly constant and broadly shared.
++- File names should match their primary exported symbol, for example `OpenAIClient.ts` or `AIClient.ts`.
++- Prefer barrel exports for a module's public API.
++- Avoid deep relative imports when path aliases become available.
++
++## Application Layer
++
++- Contains use cases and business orchestration.
++- Must not import the OpenAI SDK, AWS SDK, Alexa SDK, HTTP frameworks, or `process.env`.
++- Depends on Domain interfaces rather than concrete Infrastructure implementations.
++- Returns project-owned DTOs, values, and typed errors only.
++
++## Infrastructure Layer
++
++- Contains adapters, providers, configuration, logging, persistence, and channel integrations.
++- May depend on external libraries and SDKs.
++- Implements Domain interfaces and translates external data and exceptions at the boundary.
++- Must not contain business rules.
++- Must not leak SDK request, response, error, or client types into Domain or Application.
++
++## OpenAI
++
++- Use the OpenAI Responses API for new AI interactions.
++- Do not use Chat Completions unless explicitly required.
++- Keep the OpenAI SDK isolated within Infrastructure.
++- Return project-owned types or plain text from the AI boundary, never OpenAI SDK objects.
++- Read the API key and model only from the typed configuration module.
++
++## Testing
++
++- Write code that is testable in isolation.
++- Prefer dependency injection and interfaces so Application and Domain tests can use fakes.
++- Keep unit tests independent from network access, provider credentials, AWS, and Alexa.
++- Test provider adapters separately for request mapping, response mapping, and error translation.
++
++## Comments and Style
++
++- Write comments only to explain *why*, trade-offs, constraints, or non-obvious decisions.
++- Do not write comments that restate obvious code.
++- Keep functions small.
++- Prefer early returns.
++- Avoid nested conditionals when a guard clause or extracted function is clearer.
++- Prefer composition over inheritance.
++
++## Future Components
++
++Design additions so they can fit the existing boundaries:
++
++- Conversation Memory
++- Prompt Manager
++- Tool Calling
++- Knowledge Base
++- Vector Search
++- Multiple AI providers
++
++New providers and channels must implement or consume existing domain contracts rather than bypassing Application services.
++
++## Code Review Standard
++
++Generate code that can pass a Senior Engineer review. Prioritize maintainability, clear ownership, explicit error behavior, testability, and architecture compliance over short or clever implementations.
+diff --git a/ARCHITECTURE.md b/ARCHITECTURE.md
+new file mode 100644
+index 0000000..febaf6d
+--- /dev/null
++++ b/ARCHITECTURE.md
+@@ -0,0 +1,181 @@
++# Architecture
++
++## Project Vision
++
++alexa-gpt is an AI assistant that brings useful, safe, conversational assistance to Amazon Alexa. Its primary interface will be an Alexa Skill running on AWS Lambda, while its core behavior remains independent of Alexa, Lambda, and OpenAI.
++
++The project uses a simplified Clean Architecture to make the core application easy to test, evolve, and expose through additional channels. Telegram, a web UI, and a CLI must be able to reuse the same application services without duplicating business rules or being coupled to Alexa-specific request and response formats.
++
++The current stack is Node.js, TypeScript, the official OpenAI SDK and Responses API, Pino, and Zod. AWS Lambda and Alexa Skills Kit are planned delivery mechanisms, not dependencies of the core design.
++
++## High-Level Architecture
++
++The intended request path for Alexa is:
++
++```text
++Alexa
++  ↓
++AWS Lambda / Alexa adapter
++  ↓
++Application Service
++  ↓
++AI Client (domain interface)
++  ↓
++OpenAI Responses API
++```
++
++The channel adapter translates an external request into an application command, calls an application service, and translates the result back into the channel's response format. It must not contain business rules.
++
++```text
++Alexa ───────┐
++Telegram ───┼──> Channel adapters ──> Application services ──> Domain ports
++Web UI ─────┤                                      │                │
++CLI ────────┘                                      │                └──> Infrastructure adapters
++                                                   │                         (OpenAI, persistence, tools)
++                                                   └──> Shared policies
++```
++
++Future channels reuse the Application layer and its domain interfaces. They do not call OpenAI or storage adapters directly.
++
++## Layers
++
++### Domain
++
++The Domain layer contains the stable language of the product: entities, value objects, policies, and interfaces (ports) such as `AIClient`. It has no dependency on infrastructure frameworks, SDKs, environment variables, or transport protocols.
++
++Domain interfaces define what the application needs, not how a provider implements it. For example, `AIClient` returns plain text and never exposes OpenAI SDK objects.
++
++### Application
++
++The Application layer coordinates use cases. Services such as `AIService` receive dependencies through interfaces, enforce application-level rules, and return application-friendly results. It owns orchestration, conversation flow, authorization decisions when applicable, and recovery decisions for typed failures.
++
++It does not know whether a request originated from Alexa, Telegram, HTTP, or a command line.
++
++### Infrastructure
++
++Infrastructure implements external concerns and domain ports: OpenAI clients, Alexa/Lambda adapters, configuration, logging, persistence, HTTP clients, and third-party integrations. It may depend on SDKs such as `openai`, `ask-sdk-*`, Pino, and Zod.
++
++Infrastructure converts provider-specific failures and data into typed, application-safe forms. It must not contain business rules.
++
++### Shared
++
++Shared contains small, framework-independent cross-cutting primitives used by more than one layer: typed errors, result helpers, and narrowly scoped utilities. It must not become a catch-all folder or hide domain behavior that belongs in Domain or Application.
++
++## Dependency Rule
++
++Dependencies point inward:
++
++```text
++Infrastructure ──> Application ──> Domain
++       │                 │
++       └───────────────> Shared
++Application ──────────> Shared
++Domain ───────────────> Shared (only when truly generic)
++```
++
++Outer layers depend on inner layers; inner layers never depend on outer layers. In particular:
++
++- Domain must not import Application, Infrastructure, AWS, Alexa, OpenAI, Pino, Zod, or Node environment APIs.
++- Application must not import an OpenAI client, Lambda handler, Alexa request type, or `process.env`.
++- Infrastructure may implement Domain interfaces and compose Application services.
++- Provider SDK types stay inside Infrastructure. Public domain and application contracts use project-owned types only.
++
++Dependency injection enforces this rule: the composition root creates concrete infrastructure adapters and passes them to application services as domain interfaces.
++
++## Expected Folder Structure
++
++```text
++src/
++├── domain/
++│   ├── entities/
++│   ├── value-objects/
++│   ├── services/
++│   └── interfaces/
++│       └── AIClient.ts
++├── application/
++│   ├── services/
++│   │   └── AIService.ts
++│   ├── commands/
++│   └── dto/
++├── infrastructure/
++│   ├── ai/
++│   │   ├── OpenAIClient.ts
++│   │   ├── prompts/
++│   │   │   └── systemPrompt.ts
++│   │   └── index.ts
++│   ├── config/
++│   │   ├── schema.ts
++│   │   └── config.ts
++│   ├── logger/
++│   │   ├── logger.ts
++│   │   └── index.ts
++│   ├── alexa/
++│   ├── persistence/
++│   └── composition/
++│       └── bootstrap.ts
++├── shared/
++│   ├── errors/
++│   └── result/
++└── index.ts
++```
++
++`index.ts` is the runtime entry point. A composition or bootstrap module is responsible for assembling concrete adapters, validating startup configuration, and starting the selected channel. It should contain wiring, not business logic.
++
++## Design Principles
++
++- **SOLID:** modules have clear responsibilities, depend on abstractions, and remain open to new adapters without changing core use cases.
++- **Dependency injection:** application services receive interfaces rather than constructing provider clients.
++- **Composition over inheritance:** build behavior by composing focused services and adapters; use inheritance only when it represents a real, stable is-a relationship.
++- **Single Responsibility:** a module should have one reason to change. Prompt construction, OpenAI transport, conversation storage, and Alexa response rendering remain separate.
++- **Fail fast:** configuration and required dependencies are validated at startup, before serving requests.
++- **Explicit errors:** expected operational failures use typed project errors with safe messages and causal context.
++- **Strong typing:** compiler-checked project contracts cross layer boundaries; avoid `any`, unvalidated input, and provider-shaped data in the core.
++- **Immutable configuration:** the validated configuration object is created once and never mutated at runtime.
++
++## Error Handling
++
++Infrastructure detects provider, network, serialization, and persistence failures, then throws typed project errors rather than leaking SDK exceptions. Errors include a safe message for callers and preserve the original cause for observability.
++
++Application services decide how to respond: retry an operation where it is safe, return a fallback response, map an error to a channel-safe outcome, or allow the error to reach the adapter. Channel adapters map final errors to channel-specific responses and never disclose credentials, raw provider payloads, or stack traces to users.
++
++Unexpected errors are logged once at the appropriate boundary with structured context. Do not silently swallow failures.
++
++## Logging
++
++Pino is the single logging implementation. The infrastructure logger exports a singleton used through the application composition root and adapters.
++
++- Production logs are structured JSON for ingestion, querying, and alerting.
++- Development uses `pino-pretty` for readable local output.
++- `console.log`, `console.error`, and ad-hoc logging are prohibited.
++- Log structured context such as request ID, channel, operation, latency, and safe error metadata.
++- Never log API keys, access tokens, private conversation content, or unredacted provider payloads.
++
++## Configuration
++
++All configuration comes from the typed infrastructure configuration module. It loads environment values, validates them with Zod at startup, applies documented defaults, and exports an immutable configuration object.
++
++No other module may read `process.env` directly. Application and Domain code receive configuration-derived values through constructors or interfaces only. Secrets are supplied through environment-specific secret management in deployed environments and never committed to source control.
++
++## Future Roadmap
++
++The architecture is intentionally prepared for these additions:
++
++- **AIService:** application use case that coordinates prompt construction, AI generation, and response policies through `AIClient`.
++- **Conversation Memory:** a domain-facing repository interface with infrastructure implementations for short-term and durable conversation context.
++- **Tool Calling:** application orchestration and domain tool contracts; infrastructure adapters for external capabilities, with explicit authorization and validation.
++- **Prompt Library:** versioned, focused prompt modules that can be composed by application services without embedding prompts in transport code.
++- **Vector Store:** a repository/knowledge-retrieval port with replaceable vector database adapters.
++- **Home Assistant:** an infrastructure integration behind domain tool interfaces, never called directly from an Alexa handler.
++- **Telegram:** a channel adapter that maps Telegram updates to existing application services.
++- **Web UI:** an HTTP or realtime channel adapter that reuses the same commands, DTOs, and application services.
++
++## Coding Standards
++
++- Keep functions small, cohesive, and named for the business action they perform.
++- Prefer composition and explicit dependencies over global state and inheritance.
++- Keep business logic out of Infrastructure; adapters translate data and call application services.
++- Keep OpenAI SDK types, request objects, and response objects inside Infrastructure.
++- Validate all untrusted input at its boundary.
++- Use immutable values by default and avoid mutation that crosses module boundaries.
++- Add tests at the layer that owns the behavior: domain/application tests should use fakes; infrastructure tests should cover provider mappings and integrations.
++- Keep public interfaces minimal and stable so new providers and channels can be introduced without changing core use cases.
+diff --git a/src/application/services/.gitkeep b/src/application/services/.gitkeep
+new file mode 100644
+index 0000000..e69de29
+diff --git a/src/domain/interfaces/AIClient.ts b/src/domain/interfaces/AIClient.ts
+new file mode 100644
+index 0000000..92229b4
+--- /dev/null
++++ b/src/domain/interfaces/AIClient.ts
+@@ -0,0 +1,9 @@
++/**
++ * Domain boundary for text-generation providers.
++ *
++ * Implementations must return only the generated text and must not expose
++ * provider-specific SDK objects to callers.
++ */
++export interface AIClient {
++  generateText(prompt: string): Promise<string>;
++}
+diff --git a/src/infrastructure/ai/OpenAIClient.ts b/src/infrastructure/ai/OpenAIClient.ts
+new file mode 100644
+index 0000000..00923cd
+--- /dev/null
++++ b/src/infrastructure/ai/OpenAIClient.ts
+@@ -0,0 +1,44 @@
++import OpenAI from 'openai';
++
++import { config } from '../config/config.js';
++import type { AIClient } from '../../domain/interfaces/AIClient.js';
++import { AIClientError } from '../../shared/errors/AIClientError.js';
++import { systemPrompt } from './prompts/systemPrompt.js';
++
++/** OpenAI-backed implementation of the domain's text-generation boundary. */
++export class OpenAIClient implements AIClient {
++  private readonly client: OpenAI;
++
++  public constructor() {
++    this.client = new OpenAI({ apiKey: config.OPENAI_API_KEY });
++  }
++
++  public async generateText(prompt: string): Promise<string> {
++    const input = prompt.trim();
++
++    if (input.length === 0) {
++      throw new AIClientError('The AI prompt must not be empty.');
++    }
++
++    try {
++      const response = await this.client.responses.create({
++        model: config.OPENAI_MODEL,
++        instructions: systemPrompt,
++        input,
++      });
++      const output = response.output_text.trim();
++
++      if (output.length === 0) {
++        throw new AIClientError('The AI provider returned an empty text response.');
++      }
++
++      return output;
++    } catch (error: unknown) {
++      if (error instanceof AIClientError) {
++        throw error;
++      }
++
++      throw new AIClientError('Unable to generate an AI response.', { cause: error });
++    }
++  }
++}
+diff --git a/src/infrastructure/ai/index.ts b/src/infrastructure/ai/index.ts
+new file mode 100644
+index 0000000..f91a62e
+--- /dev/null
++++ b/src/infrastructure/ai/index.ts
+@@ -0,0 +1 @@
++export { OpenAIClient } from './OpenAIClient.js';
+diff --git a/src/infrastructure/ai/prompts/systemPrompt.ts b/src/infrastructure/ai/prompts/systemPrompt.ts
+new file mode 100644
+index 0000000..d36aa56
+--- /dev/null
++++ b/src/infrastructure/ai/prompts/systemPrompt.ts
+@@ -0,0 +1,6 @@
++/** Shared behavioral instructions for the OpenAI Responses API. */
++export const systemPrompt = [
++  'You are a helpful assistant.',
++  'Provide accurate, concise answers in plain text.',
++  'Do not use Markdown unless the user explicitly requests it.',
++].join(' ');
+diff --git a/src/shared/errors/AIClientError.ts b/src/shared/errors/AIClientError.ts
+new file mode 100644
+index 0000000..cbd1f86
+--- /dev/null
++++ b/src/shared/errors/AIClientError.ts
+@@ -0,0 +1,7 @@
++/** Error raised when the AI provider cannot produce a usable text response. */
++export class AIClientError extends Error {
++  public constructor(message: string, options?: ErrorOptions) {
++    super(message, options);
++    this.name = 'AIClientError';
++  }
++}
