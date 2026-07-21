@@ -1,9 +1,16 @@
-// Validate all runtime configuration before initializing application dependencies.
-import "./infrastructure/config/config.js";
-import { logger } from "./infrastructure/logger/logger.js";
+import type { AIClient } from "./domain/interfaces/AIClient.js";
+import { OpenAIClient } from "./infrastructure/ai/index.js";
+import { logger } from "./infrastructure/logger/index.js";
 
-logger.info(
-  '{"message": "Starting application...", "level": "info", "timestamp": "' +
-    new Date().toISOString() +
-    '"  }',
-);
+const aiClient: AIClient = new OpenAIClient();
+
+try {
+  logger.info("Starting application...");
+
+  const response = await aiClient.ask("Tell me a joke about programming.");
+
+  logger.info({ response }, "OpenAI responded successfully");
+} catch (error) {
+  logger.fatal({ err: error }, "Application failed to start");
+  process.exit(1);
+}

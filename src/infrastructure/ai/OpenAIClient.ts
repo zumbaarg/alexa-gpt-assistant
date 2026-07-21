@@ -1,9 +1,24 @@
 import OpenAI from 'openai';
 
-import { config } from '../config/config.js';
 import type { AIClient } from '../../domain/interfaces/AIClient.js';
-import { AIClientError } from '../../shared/errors/AIClientError.js';
-import { systemPrompt } from './prompts/systemPrompt.js';
+import { config } from '../config/config.js';
+import { logger } from '../logger/index.js';
+import { OpenAIError } from './errors/OpenAIError.js';
+
+function translateOpenAIError(error: unknown): OpenAIError {
+  if (error instanceof OpenAIError) {
+    return error;
+  }
+
+  if (error instanceof OpenAI.APIError && typeof error.status === 'number') {
+    return new OpenAIError('OpenAI request failed.', {
+      cause: error,
+      statusCode: error.status,
+    });
+  }
+
+  return new OpenAIError('OpenAI request failed.', { cause: error });
+}
 
 /** OpenAI-backed implementation of the domain's text-generation boundary. */
 export class OpenAIClient implements AIClient {
@@ -13,32 +28,56 @@ export class OpenAIClient implements AIClient {
     this.client = new OpenAI({ apiKey: config.OPENAI_API_KEY });
   }
 
-  public async generateText(prompt: string): Promise<string> {
+  public async ask(prompt: string): Promise<string> {
     const input = prompt.trim();
 
     if (input.length === 0) {
-      throw new AIClientError('The AI prompt must not be empty.');
+      throw new OpenAIError('The AI prompt must not be empty.');
     }
+
+    logger.info(
+      {
+        event: 'openai.request.started',
+        model: config.OPENAI_MODEL,
+        promptLength: input.length,
+      },
+      'Starting OpenAI Responses API request',
+    );
 
     try {
       const response = await this.client.responses.create({
         model: config.OPENAI_MODEL,
-        instructions: systemPrompt,
         input,
       });
       const output = response.output_text.trim();
 
       if (output.length === 0) {
-        throw new AIClientError('The AI provider returned an empty text response.');
+        throw new OpenAIError('OpenAI returned an empty text response.');
       }
+
+      logger.info(
+        {
+          event: 'openai.request.succeeded',
+          model: config.OPENAI_MODEL,
+          responseLength: output.length,
+        },
+        'OpenAI Responses API request completed',
+      );
 
       return output;
     } catch (error: unknown) {
-      if (error instanceof AIClientError) {
-        throw error;
-      }
+      const openAIError = translateOpenAIError(error);
 
-      throw new AIClientError('Unable to generate an AI response.', { cause: error });
+      logger.error(
+        {
+          err: openAIError,
+          event: 'openai.request.failed',
+          statusCode: openAIError.statusCode,
+        },
+        'OpenAI Responses API request failed',
+      );
+
+      throw openAIError;
     }
   }
 }
