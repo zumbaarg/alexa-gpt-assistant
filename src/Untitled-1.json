@@ -1,0 +1,1 @@
+{"environment":"development","event":"openai.request.completed","requestId":"698fa136-1f9c-4b5c-b9c3-cad6591b574c","responseLength":66,"model":"gpt-5.5","durationMs":2789.2709,"inputTokens":13,"outputTokens":16,"totalTokens":29,"estimatedCostUsd":0.000545}
