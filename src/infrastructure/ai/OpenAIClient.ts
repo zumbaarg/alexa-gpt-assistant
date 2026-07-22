@@ -53,8 +53,8 @@ export class OpenAIClient implements AIClient {
     this.client = new OpenAI({ apiKey: config.OPENAI_API_KEY });
   }
 
-  public async ask(prompt: string): Promise<string> {
-    const input = prompt.trim();
+  public async ask(preparedInput: string): Promise<string> {
+    const input = preparedInput.trim();
 
     if (input.length === 0) {
       throw new OpenAIError('The AI prompt must not be empty.');
